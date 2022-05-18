@@ -1,0 +1,215 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: My first CFN template
+
+Parameters:
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of existing keypair
+  EC2InstanceType:
+    Type: String
+    Description: Name of ec2 instance type
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - t2.small
+      - t2.medium
+      - t2.large
+
+Mappings:
+  AWSRegionToAMI:
+    us-east-1:
+      AMI: ami-0022f774911c1d690
+    us-east-2:
+      AMI: ami-0fa49cc9dc8d62c84
+    us-west-1:
+      AMI: ami-02541b8af977f6cdd
+    us-west-2:
+      AMI: ami-0ca285d4c2cda3300
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.10.0.0/16
+      Tags:
+        - Key: Name
+          Value: !Join ['-', [!Ref AWS::StackName, 'vpc']]
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.10.1.0/24
+      AvailabilityZone: !Join ['', [!Ref AWS::Region, 'a']]
+      Tags:
+        - Key: Name
+          Value: !Join ['-', [!Ref AWS::StackName, 'pub-sub']]
+
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.10.2.0/24
+      AvailabilityZone: !Join ['', [!Ref AWS::Region, 'b']]
+      Tags:
+        - Key: Name
+          Value: !Join ['-', [!Ref AWS::StackName, 'pri-sub']]
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Join ['-', [!Ref AWS::StackName, 'igw']]
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join ['-', [!Ref AWS::StackName, 'pub-rt']]
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join ['-', [!Ref AWS::StackName, 'pri-rt']]
+
+  PublicRouteRule:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet
+      RouteTableId: !Ref PrivateRouteTable
+
+  EC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SG for ec2 instances
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 10.10.0.0/16
+      Tags:
+        - Key: Name
+          Value: !Join ['-', [!Ref AWS::StackName, 'ec2-sg']]
+
+  ELBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SG for ELB
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Join ['-', [!Ref AWS::StackName, 'elb-sg']]
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancing::LoadBalancer
+    Properties:
+      LoadBalancerName: !Join ['-', [!Ref AWS::StackName, 'elb']]
+      Subnets:
+        - !Ref PublicSubnet
+        - !Ref PrivateSubnet
+      Instances:
+        - !Ref Web01
+        - !Ref Web02
+      SecurityGroups:
+        - !Ref ELBSecurityGroup
+      ConnectionDrainingPolicy:
+        Enabled: true
+        Timeout: 180
+      Listeners:
+        - LoadBalancerPort: 80
+          InstancePort: 80
+          Protocol: HTTP
+      HealthCheck:
+        Target: HTTP:80/index.html
+        HealthyThreshold: 3
+        UnhealthyThreshold: 5
+        Interval: 30
+        Timeout: 5
+      Tags:
+        - Key: Name
+          Value: !Join ['-', [!Ref AWS::StackName, 'elb']]
+
+  Web01:
+    Type: AWS::EC2::Instance
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      ImageId: !FindInMap [AWSRegionToAMI, !Ref AWS::Region, AMI]
+      InstanceType: !Ref EC2InstanceType
+      KeyName: !Ref KeyName
+      NetworkInterfaces:
+        - GroupSet:
+            - !Ref EC2SecurityGroup
+          AssociatePublicIpAddress: true
+          DeviceIndex: 0
+          DeleteOnTermination: true
+          SubnetId: !Ref PublicSubnet
+      Tags:
+        - Key: Name
+          Value: !Join ['-', [!Ref AWS::StackName, 'web-01']]
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum install httpd -y
+          echo "It is web-01 server" > /var/www/html/index.html
+          service httpd start
+
+  Web02:
+    Type: AWS::EC2::Instance
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      ImageId: !FindInMap [AWSRegionToAMI, !Ref AWS::Region, AMI]
+      InstanceType: !Ref EC2InstanceType
+      KeyName: !Ref KeyName
+      NetworkInterfaces:
+        - GroupSet:
+            - !Ref EC2SecurityGroup
+          AssociatePublicIpAddress: true
+          DeviceIndex: 0
+          DeleteOnTermination: true
+          SubnetId: !Ref PublicSubnet
+      Tags:
+        - Key: Name
+          Value: !Join ['-', [!Ref AWS::StackName, 'web-02']]
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum install httpd -y
+          echo "It is web-02 server" > /var/www/html/index.html
+          service httpd start
+
+Outputs:
+  ELBDns:
+    Description: DNS Name of ELB
+    Value: !Join ['', ['http://', !GetAtt LoadBalancer.DNSName]]
