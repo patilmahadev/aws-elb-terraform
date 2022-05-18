@@ -182,7 +182,7 @@ Resources:
         Fn::Base64: !Sub |
           #!/bin/bash
           yum install httpd -y
-          echo "It is web-01 server" > /var/www/html/index.html
+          echo 'It is web-01 server' > /var/www/html/index.html
           service httpd start
 
   Web02:
@@ -206,7 +206,7 @@ Resources:
         Fn::Base64: !Sub |
           #!/bin/bash
           yum install httpd -y
-          echo "It is web-02 server" > /var/www/html/index.html
+          echo 'It is web-02 server' > /var/www/html/index.html
           service httpd start
 
 Outputs:
